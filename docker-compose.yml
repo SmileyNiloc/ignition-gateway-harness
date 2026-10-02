@@ -1,0 +1,47 @@
+services:
+  ignition-gateway:
+    image: inductiveautomation/ignition:${IGNITION_VERSION:-8.1.51}
+    container_name: ${IGNITION_CONTAINER_NAME:-ignition}
+    hostname: ${IGNITION_HOSTNAME:-ignition}
+    ports:
+      - "${IGNITION_HTTP_PORT:-8089}:8088"
+      - "${IGNITION_HTTPS_PORT:-8043}:8043"
+      - "${IGNITION_GAN_PORT:-8061}:8060"
+      - "${IGNITION_OPCUA_PORT:-62222}:62222"
+    environment:
+      - ACCEPT_IGNITION_EULA=${ACCEPT_IGNITION_EULA:-Y}
+      - IGNITION_EDITION=${IGNITION_EDITION:-standard}
+      - GATEWAY_SYSTEM_NAME=${GATEWAY_SYSTEM_NAME:-Ignition_Gateway}
+      - GATEWAY_ADMIN_USERNAME=${GATEWAY_ADMIN_USERNAME:-admin}
+      - GATEWAY_ADMIN_PASSWORD=${GATEWAY_ADMIN_PASSWORD:-password}
+      - GATEWAY_HTTP_PORT=8088
+      - GATEWAY_HTTPS_PORT=8043
+      - GATEWAY_GAN_PORT=8060
+      - ACCEPT_MODULE_LICENSES=${ACCEPT_MODULE_LICENSES:-all}
+      - ACCEPT_MODULE_CERTS=${ACCEPT_MODULE_CERTS:-all}
+    command:
+      - --
+      - -Dignition.http.session.cookie.same-site.value=Lax
+      - wrapper.java.initmemory.percent=0
+      - wrapper.java.maxmemory.percent=0
+      - wrapper.java.initmemory=256
+      - wrapper.java.maxmemory=1024
+      - -Xmx1024m
+      - -XX:MaxMetaspaceSize=256m
+      - -Xss256k
+    mem_limit: 1800m
+    deploy:
+      resources:
+        limits:
+          memory: 1800M
+    volumes:
+      - ignition_data:/usr/local/bin/ignition/data
+    networks:
+      - ignition_network
+
+networks:
+  ignition_network:
+    driver: bridge
+
+volumes:
+  ignition_data:

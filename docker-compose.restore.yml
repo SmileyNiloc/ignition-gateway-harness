@@ -1,0 +1,25 @@
+services:
+  ignition-gateway:
+    # 1. Appends an extra volume for the backup file
+    volumes:
+      - ${GATEWAY_RESTORE_FILE}:/restore.gwbk:ro
+
+    # 2. Overrides the container startup command to pass the -r flag, tuned low-RAM parameters, and localhost cookie compatibility
+    command:
+      - -r
+      - /restore.gwbk
+      - --
+      - -Dignition.http.session.cookie.same-site.value=Lax
+      - wrapper.java.initmemory.percent=0
+      - wrapper.java.maxmemory.percent=0
+      - wrapper.java.initmemory=256
+      - wrapper.java.maxmemory=1024
+      - -Xmx1024m
+      - -XX:MaxMetaspaceSize=256m
+      - -Xss256k
+
+    mem_limit: 1800m
+    deploy:
+      resources:
+        limits:
+          memory: 1800M

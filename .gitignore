@@ -1,0 +1,10 @@
+backups
+.env
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+test-results/
+playwright-report/
+
+SIMULATE_PRODUCTION.md
