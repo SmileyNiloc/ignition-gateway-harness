@@ -12,10 +12,11 @@ def base_url() -> str:
 
 @pytest.fixture(scope="session")
 def wait_for_gateway_ready(base_url: str):
-    """Ensure the Ignition Gateway is in RUNNING state before running tests."""
-    timeout = 45.0
+    """Ensure the Ignition Gateway is in RUNNING state before running live tests."""
+    explicit_target = "GATEWAY_BASE_URL" in os.environ
+    timeout = float(os.getenv("GATEWAY_TIMEOUT", "45.0" if explicit_target else "2.0"))
     start = time.time()
-    with httpx.Client(base_url=base_url, timeout=5.0) as client:
+    with httpx.Client(base_url=base_url, timeout=min(5.0, timeout)) as client:
         while time.time() - start < timeout:
             try:
                 resp = client.get("/StatusPing")
@@ -23,8 +24,11 @@ def wait_for_gateway_ready(base_url: str):
                     return
             except Exception:
                 pass
-            time.sleep(2)
-    pytest.fail(f"Ignition Gateway at {base_url} did not report RUNNING within {timeout}s")
+            time.sleep(1)
+    pytest.skip(
+        f"Ignition Gateway at {base_url} is not running.\n"
+        "To run live gateway tests, start the container first or set GATEWAY_BASE_URL."
+    )
 
 
 @pytest.fixture

@@ -275,6 +275,18 @@ def merge_service_config(
     if "volumes" in overrides and isinstance(overrides["volumes"], list):
         extra_volumes = [v if isinstance(v, dict) else str(v) for v in overrides["volumes"]]
 
+    # Extra hosts (DNS redirection / blackholing)
+    extra_hosts: List[str] = []
+    if "extra_hosts" in overrides and overrides["extra_hosts"]:
+        raw_hosts = overrides["extra_hosts"]
+        if isinstance(raw_hosts, list):
+            extra_hosts.extend([str(h).strip() for h in raw_hosts if str(h).strip()])
+        elif isinstance(raw_hosts, dict):
+            for h, ip in raw_hosts.items():
+                extra_hosts.append(f"{h}:{ip}")
+        elif isinstance(raw_hosts, str):
+            extra_hosts.append(raw_hosts.strip())
+
     image = overrides.get("image", "inductiveautomation/ignition:8.1.51")
 
     # Collect any extra unrecognized docker-compose keys (e.g. restart, labels, deploy)
@@ -305,6 +317,7 @@ def merge_service_config(
         "aliases",
         "gan_alias",
         "volumes",
+        "extra_hosts",
         "low_ram",
         "low_mem",
         "compact",
@@ -344,6 +357,7 @@ def merge_service_config(
         restore=restore,
         data_volume=data_volume,
         explicit_restore=explicit_restore,
+        extra_hosts=extra_hosts,
     )
 
 

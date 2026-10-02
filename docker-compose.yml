@@ -36,12 +36,17 @@ services:
           memory: 1800M
     volumes:
       - ignition_data:/usr/local/bin/ignition/data
+    extra_hosts:
+      - "smtp.office365.com:127.0.0.1"
+      - "smtp.oshkoshglobal.com:127.0.0.1"
     networks:
       - ignition_network
 
 networks:
   ignition_network:
+    name: ignition_network
     driver: bridge
+    internal: true
 
 volumes:
   ignition_data:

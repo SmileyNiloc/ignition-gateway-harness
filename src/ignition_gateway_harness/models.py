@@ -30,6 +30,7 @@ class GatewayServiceConfig:
     restore: bool = True
     data_volume: Optional[str] = None
     explicit_restore: Optional[bool] = None
+    extra_hosts: List[str] = field(default_factory=list)
 
     def get_data_volume_name(self) -> str:
         """Return the named data volume for this service."""

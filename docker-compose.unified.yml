@@ -3,6 +3,138 @@
 #   uv run ignition-gateway-harness
 
 services:
+  sim-timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: sim-timescaledb
+    hostname: sim-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ignition
+    ports:
+    - 5432:5432
+    volumes:
+    - sim_postgres_data:/var/lib/postgresql/data
+    - ./sim_init/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    networks:
+      ignition_network:
+        aliases:
+        - db-dev-defignition-primary
+        - db-dev-defignition-primary.oshkoshglobal.com
+        - db-mock
+        - db-prd-defignition-primary
+        - db-prd-defignition-primary.oshkoshglobal.com
+        - db-prd-defmestag1-primary
+        - db-prd-defmestag1-primary.oshkoshglobal.com
+        - db-prd-defmestag2-primary
+        - db-prd-defmestag2-primary.oshkoshglobal.com
+        - db-tst-defignition-primary
+        - db-tst-defignition-primary.oshkoshglobal.com
+        - db-tst-defmestag1-primary
+        - db-tst-defmestag1-primary.oshkoshglobal.com
+        - db-tst-defmestag2-primary
+        - db-tst-defmestag2-primary.oshkoshglobal.com
+        - postgres
+        - timescaledb
+  sim-mailpit:
+    image: axllent/mailpit:latest
+    container_name: sim-mailpit
+    hostname: sim-mailpit
+    restart: unless-stopped
+    ports:
+    - 1025:1025
+    - 8025:8025
+    networks:
+      ignition_network:
+        aliases:
+        - mailpit
+        - smtp
+        - smtp-mock
+        - smtp.office365.com
+        - smtp.oshkoshglobal.com
+        - sszsmtp
+        - sszsmtp.oshkoshglobal.com
+  sim-mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: sim-mosquitto
+    hostname: sim-mosquitto
+    restart: unless-stopped
+    ports:
+    - 1883:1883
+    - 1885:1885
+    volumes:
+    - sim_mosquitto_data:/mosquitto/data
+    - ./sim_init/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      ignition_network:
+        aliases:
+        - mosquitto
+        - mqtt-mock
+        - nadefaiutlp01
+        - nadefaiutlp01.oshkoshglobal.com
+        - nadefmitsdw01
+        - nadefmitspw01
+        - nadefscdapw08
+        - nadefunsdpw01
+  sim-opc-plc:
+    image: python:3.12-slim
+    container_name: sim-opc-plc
+    hostname: sim-opc-plc
+    restart: unless-stopped
+    ports:
+    - 4840:4840
+    - 49320:49320
+    - 62541:62541
+    - 44818:44818
+    volumes:
+    - ./sim_init/mock_opc_server.py:/app/mock_opc_server.py:ro
+    command:
+    - python
+    - /app/mock_opc_server.py
+    networks:
+      ignition_network:
+        aliases:
+        - 10.163.94.107
+        - 10.163.94.11
+        - 10.163.94.12
+        - 10.163.94.14
+        - 10.163.94.197
+        - 10.163.94.215
+        - 10.163.94.216
+        - 10.163.94.219
+        - 10.163.94.36
+        - 10.163.94.37
+        - 10.163.94.40
+        - 10.163.94.68
+        - 10.163.99.20
+        - 10.163.99.21
+        - 10.163.99.22
+        - 10.163.99.23
+        - 10.163.99.24
+        - 10.163.99.25
+        - 10.163.99.26
+        - 10.163.99.27
+        - 10.163.99.35
+        - 10.163.99.37
+        - 10.163.99.39
+        - 10.163.99.40
+        - 10.163.99.41
+        - 10.163.99.42
+        - 10.163.99.43
+        - kepware
+        - nadefkepwpw01
+        - nadefkepwpw01.oshkoshglobal.com
+        - nadefkepwpw02
+        - nadefkepwpw02.oshkoshglobal.com
+        - nadefkepwqw01
+        - nadefkepwqw01.oshkoshglobal.com
+        - nadefkepwqw02
+        - nadefkepwqw02.oshkoshglobal.com
+        - nadefscdadw02
+        - nadefscdadw02.oshkoshglobal.com
+        - opc-mock
+        - plc-mock
   ngdv_dev_ignition:
     image: inductiveautomation/ignition:8.1.51
     container_name: ignition-ngdv_dev_ignition
@@ -1061,6 +1193,8 @@ networks:
     driver: bridge
     internal: true
 volumes:
+  sim_postgres_data:
+  sim_mosquitto_data:
   ngdv_dev_ignition_data:
   prod-fe1_data:
   prod-fe2_data:

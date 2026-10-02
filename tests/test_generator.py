@@ -512,6 +512,7 @@ class TestComposeValidation:
 
         # Network declaration
         assert "ignition_network" in parsed["networks"]
+        assert parsed["networks"]["ignition_network"].get("internal") is True
 
     def test_docker_compose_config_full_fleet(self, tmp_path: Path):
         """Verify the full generated 17-gateway compose file passes `docker compose config`."""
@@ -1280,6 +1281,34 @@ class TestPersistentVolumeAndRestoreModes:
             "--run",
         ])
         assert ret3 == 1
+
+    def test_cli_positional_subcommands(self, tmp_path: Path):
+        """Verify positional subcommands (analyze, sim, trial-reset) work via main()."""
+        # 1. Test analyze subcommand with export
+        rep_out = tmp_path / "report.json"
+        ret_analyze = main([
+            "analyze",
+            "--backups-dir", "backups",
+            "--filter", "PROD-SCADA_Master",
+            "--export-report", str(rep_out),
+        ])
+        assert ret_analyze == 0
+        assert rep_out.exists()
+        assert "prod-scada_master" in rep_out.read_text(encoding="utf-8")
+
+        # 2. Test sim subcommand
+        sim_out = tmp_path / "docker-compose.sim.yml"
+        sim_init = tmp_path / "sim_init"
+        ret_sim = main([
+            "sim",
+            "--backups-dir", "backups",
+            "--filter", "PROD-SCADA_Master",
+            "--sim-output", str(sim_out),
+            "--sim-init-dir", str(sim_init),
+        ])
+        assert ret_sim == 0
+        assert sim_out.exists()
+        assert (sim_init / "init-databases.sql").exists()
 
 
 

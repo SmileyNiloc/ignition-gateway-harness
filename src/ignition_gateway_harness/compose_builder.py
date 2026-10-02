@@ -1,5 +1,6 @@
 """Docker Compose file builder for the Ignition gateway fleet."""
 
+import ipaddress
 import os
 from pathlib import Path
 import re
@@ -7,6 +8,17 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from ignition_gateway_harness.models import GatewayServiceConfig
+
+
+def is_valid_extra_host_target(val: str) -> bool:
+    """Check if the target of an extra_hosts entry is a valid IP address or host-gateway."""
+    if val == "host-gateway":
+        return True
+    try:
+        ipaddress.ip_address(val.strip())
+        return True
+    except ValueError:
+        return False
 
 
 class CleanYamlDumper(yaml.SafeDumper):
@@ -149,6 +161,20 @@ def build_service_dict(svc: GatewayServiceConfig, output_dir: Path) -> Dict[str,
     else:
         service_def["networks"] = ["ignition_network"]
 
+    # Extra hosts for DNS blackholing / mock redirection
+    if svc.extra_hosts:
+        sanitized_hosts = []
+        for entry in svc.extra_hosts:
+            if ":" in entry:
+                host_part, target_part = entry.rsplit(":", 1)
+                if not is_valid_extra_host_target(target_part):
+                    sanitized_hosts.append(f"{host_part}:127.0.0.1")
+                else:
+                    sanitized_hosts.append(entry)
+            else:
+                sanitized_hosts.append(f"{entry}:127.0.0.1")
+        service_def["extra_hosts"] = sanitized_hosts
+
     # Compose profiles
     if svc.profiles:
         service_def["profiles"] = list(svc.profiles)
@@ -185,13 +211,49 @@ def build_fleet_compose_dict(
         "services": compose_services,
         "networks": {
             "ignition_network": {
+                "name": "ignition_network",
                 "driver": "bridge",
+                "internal": True,
             }
         },
         "volumes": compose_volumes,
     }
 
     return compose_dict
+
+
+def build_unified_compose_dict(
+    services: List[GatewayServiceConfig],
+    sim_report: Any,
+    sim_init_dir: Path,
+    output_path: Path,
+) -> Dict[str, Any]:
+    """Construct a unified Docker Compose dictionary combining simulation stack and fleet services."""
+    from ignition_gateway_harness.sim_generator import build_sim_compose_dict
+
+    output_dir = output_path.parent.resolve()
+    fleet_dict = build_fleet_compose_dict(services, output_path)
+    sim_dict = build_sim_compose_dict(sim_report, sim_init_dir, output_path)
+
+    unified_services: Dict[str, Any] = {}
+    unified_services.update(sim_dict.get("services", {}))
+    unified_services.update(fleet_dict.get("services", {}))
+
+    unified_volumes: Dict[str, Any] = {}
+    unified_volumes.update(sim_dict.get("volumes", {}))
+    unified_volumes.update(fleet_dict.get("volumes", {}))
+
+    return {
+        "services": unified_services,
+        "networks": {
+            "ignition_network": {
+                "name": "ignition_network",
+                "driver": "bridge",
+                "internal": True,
+            }
+        },
+        "volumes": unified_volumes,
+    }
 
 
 def build_restore_overlay_service_dict(
