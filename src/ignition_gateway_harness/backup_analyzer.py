@@ -9,6 +9,7 @@ OPC-UA endpoints, field devices, MQTT brokers, and SMTP profiles.
 
 from dataclasses import asdict, dataclass, field
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -18,7 +19,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import xml.etree.ElementTree as ET
 import zipfile
 
+from ignition_gateway_harness.core.inspector import extract_idb_tables_in_memory
 from ignition_gateway_harness.discovery import clean_identifier, derive_service_identity
+
+logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
@@ -223,7 +227,7 @@ class FleetAnalysisReport:
     def get_mock_redirection_extra_hosts(
         self,
         smtp_target: str = "sim-mailpit",
-        db_target: str = "sim-timescaledb",
+        db_target: str = "sim-mssql",
         mqtt_target: str = "sim-mosquitto",
         opc_target: str = "sim-opc-plc",
         unmocked_ip: str = "127.0.0.1",
@@ -236,7 +240,7 @@ class FleetAnalysisReport:
             if "." in s:
                 entries[s.split(".")[0].lower()] = smtp_target
 
-        # 2. Database hosts -> timescaledb/postgres
+        # 2. Database hosts -> mssql/sqlserver
         for d in self.database_hosts:
             entries[d.lower()] = db_target
             if "." in d:
@@ -428,7 +432,7 @@ def parse_jdbc_url(url: str) -> Tuple[str, Optional[str], Optional[int], Optiona
                         try:
                             port = int(v.strip())
                         except ValueError:
-                            pass
+                            logger.debug("Could not parse port as int: %s", v)
                     elif k_lower in ("instancename", "instance") and not instance:
                         instance = v.strip()
 
@@ -541,8 +545,8 @@ def parse_redundancy_xml(xml_content: str) -> RedundancyConfig:
                 cfg.sync_timeout_secs = int(entries["redundancy.sync.timeoutSecs"])
             except ValueError:
                 cfg.sync_timeout_secs = 60
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed parsing redundancy.xml properties: %s", exc)
     return cfg
 
 
@@ -591,7 +595,8 @@ def extract_idb_tables_data(idb_path: str) -> Dict[str, List[Dict[str, Any]]]:
                     cur.execute(f"SELECT * FROM {t}")
                     rows = cur.fetchall()
                     result[t] = [dict(r) for r in rows]
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Table query failed for %s: %s", t, exc)
                     result[t] = []
     finally:
         conn.close()
@@ -629,27 +634,19 @@ def analyze_backup(backup_path: Path | str, backups_dir: Optional[Path | str] = 
             try:
                 root = ET.fromstring(zf.read("backupinfo.xml").decode("utf-8", errors="replace"))
                 analysis.ignition_version = root.findtext("version")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed parsing backupinfo.xml: %s", exc)
 
         # 2. Parse redundancy.xml
         if "redundancy.xml" in zf.namelist():
             xml_text = zf.read("redundancy.xml").decode("utf-8", errors="replace")
             analysis.redundancy = parse_redundancy_xml(xml_text)
 
-        # 3. Locate and extract config.idb
+        # 3. Locate and extract config.idb in memory
         idb_name = find_idb_filename(zf)
         if idb_name:
             idb_bytes = zf.read(idb_name)
-            with tempfile.NamedTemporaryFile(suffix=".idb", delete=False) as tmp:
-                tmp.write(idb_bytes)
-                tmp_path = tmp.name
-
-            try:
-                idb_data = extract_idb_tables_data(tmp_path)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+            idb_data = extract_idb_tables_in_memory(idb_bytes)
 
             # Process SYSPROPS
             sysprops = idb_data.get("SYSPROPS", [])
@@ -664,6 +661,17 @@ def analyze_backup(backup_path: Path | str, backups_dir: Optional[Path | str] = 
             for row in idb_data.get("DATASOURCES", []):
                 url = row.get("CONNECTURL", "")
                 db_type, host, port, db_name, instance = parse_jdbc_url(url)
+
+                # Check CONNECTIONPROPS for databaseName if not present in URL
+                conn_props = row.get("CONNECTIONPROPS", "") or ""
+                if not db_name and conn_props:
+                    for part in conn_props.split(";"):
+                        if "=" in part:
+                            k, v = part.split("=", 1)
+                            if k.strip().lower() in ("databasename", "database", "initialcatalog"):
+                                db_name = v.strip()
+                                break
+
                 if not db_name and row.get("NAME"):
                     # Common convention in Ignition: datasource name matches database
                     db_name = row.get("NAME").lower()
@@ -906,6 +914,8 @@ def analyze_fleet(
             if db.db_type != "unknown" and db.db_type != "sqlite":
                 if db.database:
                     report.database_targets.setdefault(db.db_type, set()).add(db.database.lower())
+                if db.name and db.name.lower() not in ("system_logs", "unnamed"):
+                    report.database_targets.setdefault(db.db_type, set()).add(db.name.lower())
                 if db.host and db.host != "localhost" and db.host != "127.0.0.1":
                     report.database_hosts.add(db.host.lower())
                     report.all_external_hosts.add(db.host.lower())

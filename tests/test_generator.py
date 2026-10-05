@@ -510,9 +510,10 @@ class TestComposeValidation:
         # Named volume at top level
         assert "prod-fe1_data" in parsed["volumes"]
 
-        # Network declaration
+        # Network declaration (bridge network preserving port publishing)
         assert "ignition_network" in parsed["networks"]
-        assert parsed["networks"]["ignition_network"].get("internal") is True
+        assert parsed["networks"]["ignition_network"].get("driver") == "bridge"
+        assert not parsed["networks"]["ignition_network"].get("internal")
 
     def test_docker_compose_config_full_fleet(self, tmp_path: Path):
         """Verify the full generated 17-gateway compose file passes `docker compose config`."""
@@ -1309,6 +1310,35 @@ class TestPersistentVolumeAndRestoreModes:
         assert ret_sim == 0
         assert sim_out.exists()
         assert (sim_init / "init-databases.sql").exists()
+
+    def test_cli_db_type_options(self, tmp_path: Path):
+        """Verify --db-type option parses and routes to simulation generation."""
+        # 1. Verify parse_args
+        args_mssql = parse_args(["--db-type", "mssql"])
+        assert args_mssql.db_type == "mssql"
+
+        args_mysql = parse_args(["--db-type", "mysql"])
+        assert args_mysql.db_type == "mysql"
+
+        args_ts = parse_args(["--db-type", "timescale"])
+        assert args_ts.db_type == "timescale"
+
+        # 2. Test running sim generation with --db-type mysql
+        sim_out_mysql = tmp_path / "sim_mysql.yml"
+        sim_init_mysql = tmp_path / "sim_init_mysql"
+        ret_mysql = main([
+            "sim",
+            "--backups-dir", "backups",
+            "--filter", "PROD-SCADA_Master",
+            "--db-type", "mysql",
+            "--sim-output", str(sim_out_mysql),
+            "--sim-init-dir", str(sim_init_mysql),
+        ])
+        assert ret_mysql == 0
+        with open(sim_out_mysql, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        assert "sim-mysql" in data["services"]
+        assert "sim-mssql" not in data["services"]
 
 
 

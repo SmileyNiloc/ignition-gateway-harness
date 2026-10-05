@@ -50,9 +50,9 @@ def fleet_report():
 
 
 class TestDockerNetworkIsolation:
-    """Verify that ignition_network is strictly configured with internal: true."""
+    """Verify that ignition_network is configured as a bridge network preserving host port publishing."""
 
-    def test_build_fleet_compose_has_internal_network(self):
+    def test_build_fleet_compose_has_bridge_network(self):
         svc = GatewayServiceConfig(
             backup_path=Path("dummy.gwbk"),
             service_name="test-gateway",
@@ -61,39 +61,38 @@ class TestDockerNetworkIsolation:
         networks = compose_dict.get("networks", {})
         assert "ignition_network" in networks
         net = networks["ignition_network"]
-        assert net.get("internal") is True, "Fleet ignition_network must set internal: True"
+        assert not net.get("internal"), "Fleet ignition_network must not set internal: True to preserve host browser access"
         assert net.get("driver") == "bridge"
 
-    def test_build_sim_compose_has_internal_network(self, fleet_report, tmp_path: Path):
+    def test_build_sim_compose_has_bridge_network(self, fleet_report, tmp_path: Path):
         init_dir = tmp_path / "sim_init"
         compose_path = tmp_path / "docker-compose.sim.yml"
         sim_dict = build_sim_compose_dict(fleet_report, init_dir, compose_path)
         networks = sim_dict.get("networks", {})
         assert "ignition_network" in networks
         net = networks["ignition_network"]
-        assert net.get("internal") is True, "Simulation ignition_network must set internal: True"
+        assert not net.get("internal"), "Simulation ignition_network must not set internal: True to preserve host browser access"
         assert net.get("driver") == "bridge"
 
-    def test_build_unified_compose_has_internal_network(self, fleet_report, tmp_path: Path):
+    def test_build_unified_compose_has_bridge_network(self, fleet_report, tmp_path: Path):
         svc = GatewayServiceConfig(
             backup_path=Path("dummy.gwbk"),
             service_name="test-gateway",
         )
         init_dir = tmp_path / "sim_init"
-        out_path = tmp_path / "docker-compose.unified.yml"
+        out_path = tmp_path / "docker-compose.yml"
         unified_dict = build_unified_compose_dict([svc], fleet_report, init_dir, out_path)
         networks = unified_dict.get("networks", {})
         assert "ignition_network" in networks
         net = networks["ignition_network"]
-        assert net.get("internal") is True, "Unified compose ignition_network must set internal: True"
+        assert not net.get("internal"), "Unified compose ignition_network must not set internal: True to preserve host browser access"
 
-    def test_static_docker_compose_files_have_internal_network(self):
-        """Verify static compose files in repo root declare internal: true."""
+    def test_static_docker_compose_files_have_bridge_network(self):
+        """Verify static compose files in repo root declare bridge network with port publishing preserved."""
         for filename in [
             "docker-compose.yml",
             "docker-compose.sim.yml",
             "docker-compose.fleet.yml",
-            "docker-compose.unified.yml",
         ]:
             file_path = REPO_ROOT / filename
             if not file_path.exists():
@@ -103,7 +102,8 @@ class TestDockerNetworkIsolation:
             networks = data.get("networks", {})
             assert "ignition_network" in networks, f"{filename} missing ignition_network"
             net = networks["ignition_network"]
-            assert net.get("internal") is True, f"{filename} ignition_network must have internal: true"
+            assert net.get("driver") == "bridge"
+            assert not net.get("internal"), f"{filename} ignition_network must not set internal: true"
 
 
 # ==============================================================================
@@ -142,16 +142,16 @@ class TestDNSAndHostIsolation:
             if "." in s:
                 assert s.split(".")[0].lower() in aliases
 
-    def test_timescaledb_sink_aliases(self, fleet_report, tmp_path: Path):
-        """Verify sim-timescaledb captures all discovered database hostnames as network aliases."""
+    def test_mssql_sink_aliases(self, fleet_report, tmp_path: Path):
+        """Verify sim-mssql captures all discovered database hostnames as network aliases."""
         init_dir = tmp_path / "sim_init"
         compose_path = tmp_path / "docker-compose.sim.yml"
         sim_dict = build_sim_compose_dict(fleet_report, init_dir, compose_path)
-        db_svc = sim_dict["services"]["sim-timescaledb"]
+        db_svc = sim_dict["services"]["sim-mssql"]
         aliases = db_svc["networks"]["ignition_network"]["aliases"]
 
-        assert "timescaledb" in aliases
-        assert "postgres" in aliases
+        assert "mssql" in aliases
+        assert "sqlserver" in aliases
         for db_host in fleet_report.database_hosts:
             assert db_host.lower() in aliases
 
@@ -160,7 +160,7 @@ class TestDNSAndHostIsolation:
         # 1. Verify get_mock_redirection_extra_hosts produces expected symbolic mapping
         mock_map = fleet_report.get_mock_redirection_extra_hosts()
         assert any("smtp.office365.com:sim-mailpit" in e or "sim-mailpit" in e for e in mock_map)
-        assert any("db-prd-defignition-primary:sim-timescaledb" in e or "sim-timescaledb" in e for e in mock_map)
+        assert any("db-prd-defignition-primary:sim-mssql" in e or "sim-mssql" in e for e in mock_map)
 
         # 2. Verify enrich_fleet_with_isolation_hosts injects only valid IP mappings for Docker compatibility
         dummy_svc = GatewayServiceConfig(
@@ -196,14 +196,16 @@ class TestDNSAndHostIsolation:
         assert any("smtp.office365.com:127.0.0.1" in e for e in extra)
         assert any("db-prd-defignition-primary:127.0.0.1" in e for e in extra)
 
-    def test_static_docker_compose_has_smtp_extra_hosts(self):
-        """Verify root docker-compose.yml has extra_hosts blackholing SMTP relays."""
+    def test_static_docker_compose_has_smtp_isolation(self):
+        """Verify root docker-compose.yml has Mailpit capturing SMTP relays."""
         compose_path = REPO_ROOT / "docker-compose.yml"
         with open(compose_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
-        gw = data["services"]["ignition-gateway"]
-        assert "extra_hosts" in gw
-        assert any("smtp.office365.com" in h for h in gw["extra_hosts"])
+        services = data.get("services", {})
+        assert "sim-mailpit" in services, "sim-mailpit must be present in unified docker-compose.yml"
+        mailpit_net = services["sim-mailpit"].get("networks", {}).get("ignition_network", {})
+        aliases = mailpit_net.get("aliases", [])
+        assert len(aliases) > 0, "sim-mailpit must have aliases to capture outbound SMTP"
 
 
 # ==============================================================================
@@ -212,10 +214,10 @@ class TestDNSAndHostIsolation:
 
 
 class TestUnifiedComposeGeneration:
-    """Verify generation and syntax of docker-compose.unified.yml."""
+    """Verify generation and syntax of docker-compose.yml as unified compose."""
 
     def test_unified_compose_contains_sim_and_fleet(self, fleet_report, tmp_path: Path):
-        out_unified = tmp_path / "docker-compose.unified.yml"
+        out_unified = tmp_path / "docker-compose.yml"
         out_sim = tmp_path / "docker-compose.sim.yml"
         out_fleet = tmp_path / "docker-compose.fleet.yml"
         init_dir = tmp_path / "sim_init"
@@ -236,14 +238,15 @@ class TestUnifiedComposeGeneration:
             data = yaml.safe_load(f)
 
         # Both simulation and fleet services must exist
-        assert "sim-timescaledb" in data["services"]
+        assert "sim-mssql" in data["services"]
+        assert "sim-db-init" in data["services"]
         assert "sim-mailpit" in data["services"]
         assert "sim-mosquitto" in data["services"]
         assert "sim-opc-plc" in data["services"]
         assert "prod-fe1" in data["services"]
 
-        # Shared isolated network
-        assert data["networks"]["ignition_network"]["internal"] is True
+        # Shared bridge network preserving port publishing
+        assert not data["networks"]["ignition_network"].get("internal")
 
     def test_unified_compose_docker_config_validation(self, tmp_path: Path):
         """Verify unified compose file validates with `docker compose config`."""
@@ -251,7 +254,7 @@ class TestUnifiedComposeGeneration:
         if not docker_bin:
             pytest.skip("Docker CLI is not available in test environment")
 
-        out_unified = tmp_path / "docker-compose.unified.yml"
+        out_unified = tmp_path / "docker-compose.yml"
         out_sim = tmp_path / "docker-compose.sim.yml"
         out_fleet = tmp_path / "docker-compose.fleet.yml"
         init_dir = tmp_path / "sim_init"
@@ -274,6 +277,11 @@ class TestUnifiedComposeGeneration:
             cwd=REPO_ROOT,
         )
         assert res.returncode == 0, f"docker compose config failed:\n{res.stderr}\n{res.stdout}"
+
+    def test_unified_compose_default_path_is_docker_compose_yml(self):
+        """Verify CLI default path for unified compose is docker-compose.yml."""
+        args = parse_args([])
+        assert getattr(args, "unified_output") == Path("docker-compose.yml")
 
 
 # ==============================================================================
@@ -341,7 +349,7 @@ class TestSingleCommandOrchestrationCLI:
         from ignition_gateway_harness.generator import main
         dummy_fleet = tmp_path / "docker-compose.fleet.yml"
         dummy_sim = tmp_path / "docker-compose.sim.yml"
-        dummy_unified = tmp_path / "docker-compose.unified.yml"
+        dummy_unified = tmp_path / "docker-compose.yml"
 
         code = main([
             "up",
@@ -374,6 +382,22 @@ class TestSingleCommandOrchestrationCLI:
             isolate=True,
         )
 
+        # Scrape and isolate network/container names for ephemeral test to avoid colliding with active daemon containers
+        with open(out_fleet, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        test_net_name = f"test_net_{tmp_path.name}"
+        data["networks"] = {"test_isolated_net": {"name": test_net_name, "driver": "bridge"}}
+        for s in data.get("services", {}).values():
+            s["container_name"] = f"test-cntnr-{tmp_path.name}"
+            if "networks" in s:
+                if isinstance(s["networks"], dict):
+                    data_net = s["networks"].get("ignition_network") or {}
+                    s["networks"] = {"test_isolated_net": data_net}
+                elif isinstance(s["networks"], list):
+                    s["networks"] = ["test_isolated_net"]
+        with open(out_fleet, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
         try:
             res = subprocess.run(
                 [docker_bin, "compose", "-f", str(out_fleet), "--profile", "dev", "create"],
@@ -394,7 +418,7 @@ class TestSingleCommandOrchestrationCLI:
         """Verify run_down_cli cleanly runs without crashing."""
         dummy_fleet = tmp_path / "docker-compose.fleet.yml"
         dummy_sim = tmp_path / "docker-compose.sim.yml"
-        dummy_unified = tmp_path / "docker-compose.unified.yml"
+        dummy_unified = tmp_path / "docker-compose.yml"
 
         args = parse_args([
             "down",

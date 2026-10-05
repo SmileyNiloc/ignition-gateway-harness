@@ -1059,7 +1059,6 @@ networks:
   ignition_network:
     name: ignition_network
     driver: bridge
-    internal: true
 volumes:
   ngdv_dev_ignition_data:
   prod-fe1_data:

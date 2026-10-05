@@ -1,6 +1,6 @@
 """Ignition Gateway Harness - Test and fleet automation toolkit."""
 
-from ignition_gateway_harness.generator import generate_fleet_compose, main
+from ignition_gateway_harness.generator import generate_fleet_compose, main, run_deploy_cli
 from ignition_gateway_harness.models import GatewayServiceConfig
 from ignition_gateway_harness.exceptions import (
     FleetGeneratorError,
@@ -40,9 +40,20 @@ from ignition_gateway_harness.trial_reset import (
     TrialStatus,
     resolve_gateway_targets,
 )
+from ignition_gateway_harness.core import (
+    BackupInspector,
+    DatabaseProvisioner,
+    DeployedGateway,
+    GatewayManager,
+    GatewayOrchestrator,
+    GatewaySpec,
+    GatewayStatus,
+    inspect_backup,
+)
 
 __all__ = [
     "main",
+    "run_deploy_cli",
     "generate_fleet_compose",
     "build_unified_compose_dict",
     "GatewayServiceConfig",
@@ -72,5 +83,12 @@ __all__ = [
     "TrialResetResult",
     "TrialStatus",
     "resolve_gateway_targets",
+    "GatewayManager",
+    "DeployedGateway",
+    "GatewaySpec",
+    "BackupInspector",
+    "inspect_backup",
+    "GatewayOrchestrator",
+    "GatewayStatus",
+    "DatabaseProvisioner",
 ]
-

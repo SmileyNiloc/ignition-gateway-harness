@@ -4,20 +4,30 @@
 #   docker compose -f docker-compose.sim.yml up -d
 
 services:
-  sim-timescaledb:
-    image: timescale/timescaledb:latest-pg15
-    container_name: sim-timescaledb
-    hostname: sim-timescaledb
+  sim-mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sim-mssql
+    hostname: sim-mssql
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: ignition
+      ACCEPT_EULA: Y
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Password123!}
+      MSSQL_PID: Developer
+      MSSQL_COLLATION: SQL_Latin1_General_CP1_CI_AS
     ports:
-    - 5432:5432
+    - 1433:1433
     volumes:
-    - sim_postgres_data:/var/lib/postgresql/data
-    - ./sim_init/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    - sim_mssql_data:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "${MSSQL_SA_PASSWORD:-Password123!}"
+        -C -Q "SELECT 1" || /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "password"
+        -C -Q "SELECT 1" || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${MSSQL_SA_PASSWORD:-Password123!}"
+        -Q "SELECT 1" || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "password"
+        -Q "SELECT 1"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     networks:
       ignition_network:
         aliases:
@@ -36,8 +46,33 @@ services:
         - db-tst-defmestag1-primary.oshkoshglobal.com
         - db-tst-defmestag2-primary
         - db-tst-defmestag2-primary.oshkoshglobal.com
-        - postgres
-        - timescaledb
+        - mssql
+        - sqlserver
+  sim-db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sim-db-init
+    hostname: sim-db-init
+    restart: 'no'
+    depends_on:
+      sim-mssql:
+        condition: service_healthy
+    volumes:
+    - ./sim_init/init-databases.sql:/init-databases.sql:ro
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Password123!}
+    networks:
+    - ignition_network
+    entrypoint:
+    - /bin/bash
+    - -c
+    - "set -e\necho \"[DB-INIT] Executing init-databases.sql against SQL Server instance\
+      \ 'sim-mssql'...\"\nif [ -f /opt/mssql-tools18/bin/sqlcmd ]; then\n  /opt/mssql-tools18/bin/sqlcmd\
+      \ -S sim-mssql -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -i /init-databases.sql\
+      \ || \\\n  /opt/mssql-tools18/bin/sqlcmd -S sim-mssql -U sa -P \"password\"\
+      \ -C -b -i /init-databases.sql\nelse\n  /opt/mssql-tools/bin/sqlcmd -S sim-mssql\
+      \ -U sa -P \"$$MSSQL_SA_PASSWORD\" -b -i /init-databases.sql || \\\n  /opt/mssql-tools/bin/sqlcmd\
+      \ -S sim-mssql -U sa -P \"password\" -b -i /init-databases.sql\nfi\necho \"\
+      [DB-INIT] Databases and baseline tables initialized successfully.\"\n"
   sim-mailpit:
     image: axllent/mailpit:latest
     container_name: sim-mailpit
@@ -137,10 +172,9 @@ services:
         - opc-mock
         - plc-mock
 volumes:
-  sim_postgres_data:
+  sim_mssql_data:
   sim_mosquitto_data:
 networks:
   ignition_network:
     name: ignition_network
     driver: bridge
-    internal: true

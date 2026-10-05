@@ -29,27 +29,72 @@ def fleet_report():
 
 
 class TestInitSqlGeneration:
-    """Verify PostgreSQL / TimescaleDB DDL and database generation."""
+    """Verify Microsoft SQL Server 2022 T-SQL DDL and database generation."""
 
     def test_init_sql_contains_all_discovered_databases(self, fleet_report):
         sql = generate_init_sql(fleet_report)
         for db in ["mes", "scada", "prod", "scada_tagio1", "scada_tagio2", "scada_head", "mes_dev"]:
-            assert f"CREATE DATABASE {db}" in sql
+            assert f"CREATE DATABASE [{db}]" in sql
 
     def test_init_sql_creates_discovered_users(self, fleet_report):
         sql = generate_init_sql(fleet_report)
-        assert "defsvcmesdev" in sql
-        assert "defsvcscadadev" in sql
-        assert "defsvcprdheadprd" in sql
-        assert "SUPERUSER" in sql
+        assert "DEFSVCMESDEV" in sql or "defsvcmesdev" in sql.lower()
+        assert "DEFSVCSCADADEV" in sql or "defsvcscadadev" in sql.lower()
+        assert "DEFSVCPRDHEADPRD" in sql or "defsvcprdheadprd" in sql.lower()
+        assert "ALTER LOGIN [sa] WITH PASSWORD = N'password', CHECK_POLICY = OFF;" in sql
+        assert "WITH PASSWORD = N'password'" in sql
+        assert "CHECK_EXPIRATION = OFF" in sql
+        assert "CHECK_POLICY = OFF;" in sql
+        assert "db_owner" in sql
+
+    def test_init_sql_skips_special_principals_sa_and_dbo(self, fleet_report):
+        """Verify that discovered usernames 'sa' and 'dbo' are safely excluded from CREATE USER / ALTER ROLE."""
+        from ignition_gateway_harness.backup_analyzer import GatewayBackupAnalysis, DatabaseConnection
+        gw = GatewayBackupAnalysis(
+            backup_path=Path("mock.gwbk"),
+            service_name="mock-gw",
+            gateway_name="mock-gw",
+            databases=[
+                DatabaseConnection(name="test_db", connect_url="jdbc:sqlserver://localhost", username="sa"),
+                DatabaseConnection(name="test_db2", connect_url="jdbc:sqlserver://localhost", username="dbo"),
+            ],
+        )
+        fleet_report.gateways["mock-gw"] = gw
+
+        sql = generate_init_sql(fleet_report, db_type="mssql")
+        assert "ALTER LOGIN [sa] WITH PASSWORD = N'password', CHECK_POLICY = OFF;" in sql
+        assert "CREATE USER [sa]" not in sql
+        assert "CREATE USER [dbo]" not in sql
+        assert "ALTER ROLE [db_owner] ADD MEMBER [sa];" not in sql
+        assert "ALTER ROLE [db_owner] ADD MEMBER [dbo];" not in sql
 
     def test_init_sql_historian_and_alarm_tables(self, fleet_report):
         sql = generate_init_sql(fleet_report)
+        assert "CREATE TABLE [dbo].[sqlth_drv]" in sql
+        assert "CREATE TABLE [dbo].[sqlth_tables]" in sql
+        assert "CREATE TABLE [dbo].[sqlth_te]" in sql
+        assert "CREATE TABLE [dbo].[alarm_events]" in sql
+        assert "CREATE TABLE [dbo].[alarm_event_data]" in sql
+        assert "CREATE TABLE [dbo].[audit_events]" in sql
+
+    def test_init_sql_contains_connectionprops_catalog_databases(self, fleet_report):
+        sql = generate_init_sql(fleet_report)
+        for db in ["proddb_head", "mes_head_01", "scada_tag_iog1", "scada_tag_iog2"]:
+            assert f"CREATE DATABASE [{db}]" in sql
+
+    def test_init_sql_mysql_mode(self, fleet_report):
+        sql = generate_init_sql(fleet_report, db_type="mysql")
+        assert "CREATE DATABASE IF NOT EXISTS `prod`" in sql
+        assert "CREATE TABLE IF NOT EXISTS `sqlth_drv`" in sql
+        assert "CREATE TABLE IF NOT EXISTS `sqlth_sce`" in sql
+        assert "CREATE TABLE IF NOT EXISTS `audit_events`" in sql
+        assert "password" in sql
+
+    def test_init_sql_timescale_mode(self, fleet_report):
+        sql = generate_init_sql(fleet_report, db_type="timescale")
         assert "CREATE TABLE IF NOT EXISTS sqlth_drv" in sql
-        assert "CREATE TABLE IF NOT EXISTS sqlth_tables" in sql
-        assert "CREATE TABLE IF NOT EXISTS sqlth_te" in sql
-        assert "CREATE TABLE IF NOT EXISTS alarm_events" in sql
-        assert "CREATE TABLE IF NOT EXISTS alarm_event_data" in sql
+        assert "CREATE TABLE IF NOT EXISTS sqlth_sce" in sql
+        assert "CREATE TABLE IF NOT EXISTS audit_events" in sql
 
 
 class TestMosquittoConf:
@@ -155,15 +200,19 @@ class TestSimComposeGeneration:
         sim_dict = build_sim_compose_dict(fleet_report, init_dir, compose_path)
 
         services = sim_dict["services"]
-        assert "sim-timescaledb" in services
+        assert "sim-mssql" in services
+        assert "sim-db-init" in services
         assert "sim-mailpit" in services
         assert "sim-mosquitto" in services
         assert "sim-opc-plc" in services
 
+        # Check MSSQL ports
+        assert "1433:1433" in services["sim-mssql"]["ports"]
+
         # Check DB network aliases
-        db_aliases = services["sim-timescaledb"]["networks"]["ignition_network"]["aliases"]
-        assert "timescaledb" in db_aliases
-        assert "postgres" in db_aliases
+        db_aliases = services["sim-mssql"]["networks"]["ignition_network"]["aliases"]
+        assert "mssql" in db_aliases
+        assert "sqlserver" in db_aliases
         assert any("db-dev-defignition-primary" in a for a in db_aliases)
         assert any("db-prd-defignition-primary" in a for a in db_aliases)
 
@@ -182,8 +231,17 @@ class TestSimComposeGeneration:
         assert "opc-mock" in opc_aliases
         assert any("10.163." in a for a in opc_aliases)
 
-        # Check network isolation (internal: true)
-        assert sim_dict["networks"]["ignition_network"].get("internal") is True
+        # Check network driver and preserved port publishing (no internal: true)
+        assert sim_dict["networks"]["ignition_network"].get("driver") == "bridge"
+        assert not sim_dict["networks"]["ignition_network"].get("internal")
+
+        # Check healthcheck and db-init dual password fallback
+        hc_test = services["sim-mssql"]["healthcheck"]["test"]
+        assert "password" in hc_test
+        assert "${MSSQL_SA_PASSWORD:-Password123!}" in hc_test
+        init_entrypoint = services["sim-db-init"]["entrypoint"][2]
+        assert "password" in init_entrypoint
+        assert "$$MSSQL_SA_PASSWORD" in init_entrypoint
 
     def test_write_simulation_stack(self, fleet_report, tmp_path: Path):
         compose_path = tmp_path / "docker-compose.sim.yml"
@@ -200,7 +258,28 @@ class TestSimComposeGeneration:
         with open(out_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         assert "services" in data
-        assert "sim-timescaledb" in data["services"]
+        assert "sim-mssql" in data["services"]
+        assert "sim-db-init" in data["services"]
+
+    def test_sim_compose_mysql_and_timescale_modes(self, fleet_report, tmp_path: Path):
+        init_dir = tmp_path / "sim_init"
+        compose_path = tmp_path / "docker-compose.sim.yml"
+
+        # 1. MySQL mode
+        mysql_dict = build_sim_compose_dict(fleet_report, init_dir, compose_path, db_type="mysql")
+        assert "sim-mysql" in mysql_dict["services"]
+        assert "sim-mssql" not in mysql_dict["services"]
+        assert "3306:3306" in mysql_dict["services"]["sim-mysql"]["ports"]
+        assert "sim_mysql_data" in mysql_dict["volumes"]
+        assert mysql_dict["services"]["sim-mysql"]["environment"]["MYSQL_ROOT_PASSWORD"] == "password"
+
+        # 2. TimescaleDB mode
+        pg_dict = build_sim_compose_dict(fleet_report, init_dir, compose_path, db_type="timescale")
+        assert "sim-timescaledb" in pg_dict["services"]
+        assert "sim-mssql" not in pg_dict["services"]
+        assert "5432:5432" in pg_dict["services"]["sim-timescaledb"]["ports"]
+        assert "sim_postgres_data" in pg_dict["volumes"]
+        assert pg_dict["services"]["sim-timescaledb"]["environment"]["POSTGRES_PASSWORD"] == "password"
 
 
 class TestFleetAliasEnrichment:

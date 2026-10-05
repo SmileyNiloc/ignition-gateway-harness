@@ -9,13 +9,13 @@ The harness discovers `.gwbk` gateway backup archives, manages persistent volume
 ## Key Features
 
 - **100% Production Isolation (Zero Outbound Leaks & Email Sink Trap)**:
-  - **Kernel-Level Docker Network Isolation**: `internal: true` on `ignition_network` across all compose configurations (`docker-compose.yml`, `docker-compose.fleet.yml`, `docker-compose.sim.yml`, `docker-compose.unified.yml`). Completely removes default gateway routes inside containers, strictly forbidding any outbound traffic to corporate LAN, VPN, host network, or WAN.
+  - **Host Port Publishing Preserved**: Standard Docker bridge `ignition_network` allows direct host browser access to gateway web UIs (e.g. `http://localhost:8100`). Defense-in-depth isolation is provided by `extra_hosts` blackholing and container mock redirection.
   - **Zero Outbound Emails**: Discovered corporate mail relays (`smtp.office365.com`, `smtp.oshkoshglobal.com`, `sszsmtp`) resolve directly to Mailpit. Real alarm emails can NEVER reach real people. All emails are captured in the Mailpit sink web UI at `http://localhost:8025`.
   - **DNS & Host Blackholing / Redirection (`extra_hosts`)**: All discovered production database servers, SMTP relays, MQTT brokers, and OPC endpoints are injected into `extra_hosts` redirecting to local simulation containers or blackholing to `127.0.0.1` / `0.0.0.0`.
 - **Single-Command Orchestration (`up` / `down`)**:
   - `ignition-gateway-harness up`: 1 command to generate isolated configs, launch simulation stack, start gateway profile, poll `/StatusPing` until RUNNING, and trigger Playwright trial reset automatically.
   - `ignition-gateway-harness down`: 1 command to cleanly stop all fleet and simulation containers.
-  - `docker-compose.unified.yml`: Single combined compose file to run simulation and fleet in 1 raw `docker compose` command if preferred.
+  - `docker-compose.yml`: "One file creates all" combined compose file to run simulation and fleet in 1 raw `docker compose` command without flags.
 - **Dual-Mode Operation**:
   - **Restore Mode**: Restores gateway configurations and projects from `.gwbk` backup archives on container initialization (`-r /restore.gwbk`).
   - **Persistent Run Mode**: Starts existing containers directly from Docker persistent named volumes (`<service_name>_data`) without re-restoring, preserving all runtime state, SQLite configurations, and user changes across container restarts.
@@ -35,7 +35,7 @@ The harness discovers `.gwbk` gateway backup archives, manages persistent volume
   - Automatically inspects `.gwbk` gateway backups and embedded SQLite configuration databases (`config.idb`) to extract exact expected JDBC database connections, redundancy partners, GAN remote providers, OPC-UA servers, PLC field devices, and SMTP/MQTT peripherals without modifying the gateways.
 - **Peripheral Simulation Stack**:
   - Generates containerized simulation services (`docker-compose.sim.yml`) providing external dependencies expected by the backups:
-    - PostgreSQL / TimescaleDB pre-configured with discovered database schemas (`mes`, `scada`, `prod`, etc.), user roles, and standard Ignition historian tables.
+    - Microsoft SQL Server 2022 (`sim-mssql` on port 1433) pre-configured with discovered database schemas (`mes`, `scada`, `prod`, etc.), user roles, sidecar database initializer (`sim-db-init`), and standard Ignition historian/audit tables.
     - Mailpit SMTP container for alarm notifications.
     - Mosquitto MQTT broker for Sparkplug B and Cirrus Link modules.
     - Mock OPC-UA & Rockwell CIP / EtherNet/IP socket responder.
@@ -60,9 +60,9 @@ uv run ignition-gateway-harness up --all
 uv run ignition-gateway-harness up --profile prod
 ```
 What this single command does automatically:
-1. Generates and synchronizes isolated `docker-compose.fleet.yml`, `docker-compose.sim.yml`, and `docker-compose.unified.yml` with `internal: true`.
-2. Starts the peripheral simulation stack (TimescaleDB, Mailpit, Mosquitto, Mock OPC).
-3. Starts the fleet gateway containers in the isolated Docker bridge network.
+1. Generates and synchronizes `docker-compose.fleet.yml`, `docker-compose.sim.yml`, and `docker-compose.yml` ("One file creates all") preserving host port publishing.
+2. Starts the peripheral simulation stack (MSSQL 2022 on :1433, Mailpit, Mosquitto, Mock OPC).
+3. Starts the fleet gateway containers in the Docker bridge network.
 4. Polls HTTP `/StatusPing` until gateways report healthy and `RUNNING`.
 5. Runs the Playwright automated trial reset across all ready gateways.
 6. Prints gateway URLs and Mailpit email sink URL (`http://localhost:8025`).
@@ -75,13 +75,13 @@ uv run ignition-gateway-harness down
 uv run ignition-gateway-harness down -v
 ```
 
-### Or Run via Pure Docker Compose (1 Command)
+### Or Run via Pure Docker Compose (1 Command — "One File Creates All")
 ```bash
 # Spin up simulation stack and dev fleet profile in 1 docker command:
-docker compose -f docker-compose.unified.yml --profile dev up -d
+docker compose --profile dev up -d
 
 # Spin up entire 17-gateway fleet and simulation stack:
-docker compose -f docker-compose.unified.yml --profile "*" up -d
+docker compose --profile "*" up -d
 ```
 
 ---
@@ -90,7 +90,7 @@ docker compose -f docker-compose.unified.yml --profile "*" up -d
 
 | Protection Layer | Mechanism | Effect |
 | :--- | :--- | :--- |
-| **Network Egress Drop** | `networks.ignition_network.internal: true` | Removes default gateway in container network namespace. Linux kernel immediately rejects any non-bridge packet with `Network unreachable`. Zero egress to host LAN, corporate VPN, or WAN. |
+| **Network Isolation** | Bridge `ignition_network` (no `internal: true`) | Preserves host browser port publishing (localhost:8100) while defense-in-depth isolation is provided by `extra_hosts` blackholing and mock redirection. |
 | **Email Sink Trap** | Mailpit on port 1025/8025 with SMTP aliases | Discovered corporate mail hosts (`smtp.office365.com`, `smtp.oshkoshglobal.com`, `sszsmtp`) route to Mailpit inside Docker. Zero emails reach real people. |
 | **DNS Redirection** | Docker embedded DNS (`127.0.0.11`) + `extra_hosts` | External corporate DNS cannot be resolved. Discovered hostnames route to local mock containers or are blackholed to `127.0.0.1`. |
 | **Port Publishing** | Inbound-only localhost port forwarding (`8100:8088`) | Host can access gateways via localhost; gateways cannot initiate outbound connections to host network. |
@@ -239,5 +239,5 @@ uv run pytest tests/test_trial_reset.py
 
 ## Production Simulation Architecture
 
-For the complete architectural blueprint and production parity roadmap (TimescaleDB, Mailpit, Mosquitto, Snap7/Milo PLC simulation, Keycloak IdP, Traefik ingress), see [SIMULATE_PRODUCTION.md](SIMULATE_PRODUCTION.md).
+For the complete architectural blueprint and production parity roadmap (Microsoft SQL Server 2022, Mailpit, Mosquitto, Snap7/Milo PLC simulation, Keycloak IdP, Traefik ingress), see [SIMULATE_PRODUCTION.md](SIMULATE_PRODUCTION.md).
 
